@@ -517,49 +517,56 @@ LeastRequestLoadBalancer::LeastRequestLoadBalancer(
     const envoy::api::v2::Cluster::CommonLbConfig& common_config)
     : ZoneAwareLoadBalancerBase(priority_set, local_priority_set, stats, runtime, random,
                                 common_config) {
-  priority_set.addMemberUpdateCb(
-      [this](uint32_t, const HostVector&, const HostVector& hosts_removed) -> void {
-        if (last_host_) {
-          for (const HostSharedPtr& host : hosts_removed) {
-            if (host == last_host_) {
-              hits_left_ = 0;
-              last_host_.reset();
-
-              break;
-            }
-          }
-        }
-      });
+  /*priority_set.addMemberUpdateCb([this](uint32_t priority, const HostVector& hosts_added,
+                                        const HostVector& hosts_removed) -> void {
+    if (!hosts_added.empty() || !hosts_removed.empty()) {
+      total_weights_.resize(priority + 1);
+      total_weights_[priority] = 0;
+      for () {
+      }
+    }
+  });*/
 }
 
 HostConstSharedPtr LeastRequestLoadBalancer::chooseHost(LoadBalancerContext*) {
-  bool is_weight_imbalanced = stats_.max_host_weight_.value() != 1;
-  bool is_weight_enabled = runtime_.snapshot().getInteger("upstream.weight_enabled", 1UL) != 0;
-
-  if (is_weight_imbalanced && hits_left_ > 0 && is_weight_enabled) {
-    --hits_left_;
-
-    return last_host_;
-  } else {
-    // To avoid hit stale last_host_ when all hosts become weight balanced.
-    hits_left_ = 0;
-    last_host_.reset();
-  }
+  const bool is_weight_imbalanced = stats_.max_host_weight_.value() != 1;
+  // fixfix string constant
+  const bool is_weight_enabled =
+      runtime_.snapshot().getInteger("upstream.weight_enabled", 1UL) != 0;
 
   const HostVector& hosts_to_use = hostSourceToHosts(hostSourceToUse());
   if (hosts_to_use.empty()) {
     return nullptr;
   }
 
-  // Make weighed random if we have hosts with non 1 weights.
-  if (is_weight_imbalanced & is_weight_enabled) {
-    last_host_ = hosts_to_use[random_.random() % hosts_to_use.size()];
-    hits_left_ = last_host_->weight() - 1;
+  // Save the first random selection as we might need to use it during weighted processing.
+  const uint64_t first_random_pick = random_.random();
+  const HostSharedPtr host1 = hosts_to_use[first_random_pick % hosts_to_use.size()];
+  HostSharedPtr host2;
+  // fixfix iterations
+  for (uint64_t new_host_try = 0; new_host_try < 100; new_host_try++) {
+    host2 = hosts_to_use[random_.random() % hosts_to_use.size()];
+    if (host1 != host2) {
+      break;
+    }
+  }
 
-    return last_host_;
+  if (is_weight_imbalanced & is_weight_enabled) {
+    // fixfix
+    const uint64_t real_h1_active = std::max(1UL, host1->stats().rq_active_.value());
+    const uint64_t real_h2_active = std::max(1UL, host2->stats().rq_active_.value());
+    const double scaled_h1_active = static_cast<double>(real_h1_active) / host1->weight();
+    const double scaled_h2_active = static_cast<double>(real_h2_active) / host2->weight();
+    const uint64_t percent_h1_requests =
+        10000 * (scaled_h1_active / (scaled_h1_active + scaled_h2_active));
+    std::cerr << fmt::format("{} {} {}\n", scaled_h1_active, scaled_h2_active, percent_h1_requests);
+    if ((first_random_pick % 10000) < percent_h1_requests) {
+      return host2;
+    } else {
+      return host1;
+    }
   } else {
-    HostSharedPtr host1 = hosts_to_use[random_.random() % hosts_to_use.size()];
-    HostSharedPtr host2 = hosts_to_use[random_.random() % hosts_to_use.size()];
+    // Fast path with everything weighted equally.
     if (host1->stats().rq_active_.value() < host2->stats().rq_active_.value()) {
       return host1;
     } else {

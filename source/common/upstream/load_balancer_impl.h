@@ -255,11 +255,7 @@ private:
  * and compares number of active requests.
  * Technique is based on http://www.eecs.harvard.edu/~michaelm/postscripts/mythesis.pdf
  *
- * When any of the hosts have non 1 weight, apply random weighted balancing.
- * Randomly pickup the host and send 'weight' number of requests to it.
- * This technique is acceptable for load testing but
- * will not work well in situations where requests take a long time.
- * In that case a different algorithm using a full scan will be required.
+ * FIXFIX
  */
 class LeastRequestLoadBalancer : public LoadBalancer, ZoneAwareLoadBalancerBase {
 public:
@@ -272,8 +268,7 @@ public:
   HostConstSharedPtr chooseHost(LoadBalancerContext* context) override;
 
 private:
-  HostSharedPtr last_host_;
-  uint32_t hits_left_{};
+  std::vector<uint32_t> total_weights_;
 };
 
 /**
